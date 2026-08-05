@@ -92,6 +92,19 @@ python3 main.py
 python3 scripts/build_team_ratings.py
 ```
 
+### Avaliar as previsões de uma janela recente (tabelas + gráficos)
+
+```bash
+# últimos 14 dias do dataset (padrão), ou uma data específica:
+python3 scripts/evaluate_recent_window.py
+python3 scripts/evaluate_recent_window.py --start 2026-07-20
+```
+
+Gera em `artifacts/reports/recent_window/`: tabela jogo a jogo e por série (CSV),
+métricas + parâmetros usados (JSON) e três gráficos (previsões com acertos/erros,
+métricas vs backtest completo e matriz de confusão). As previsões são honestas:
+cada jogo usa apenas informação anterior a ele.
+
 ### Prever uma série
 
 ```bash
