@@ -10,9 +10,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from lol_ai.config import MODEL_ARTIFACTS_DIR, PROCESSED_DATA_DIR, LEGACY_PROCESSED_FILE
+from lol_ai.config import MODEL_ARTIFACTS_DIR, PROCESSED_DATA_DIR, LEGACY_PROCESSED_FILE, RATING_CONFIG_FILE
 from lol_ai.modeling.features import build_feature_frame, load_context_dataset, normalize_text
-from lol_ai.modeling.player_impact import build_player_ratings, evaluate_lineup
+from lol_ai.modeling.player_impact import build_impact_lookup, build_player_ratings, evaluate_lineup
+from lol_ai.modeling.rating import EloConfig, expected_score
+from lol_ai.modeling.rating_backtest import blend_probabilities, run_walk_forward
+from lol_ai.modeling.series import series_probabilities
 
 
 @dataclass(frozen=True)
@@ -331,4 +334,114 @@ def predict_matchup(
             "adjusted_blue_win_probability": blue_win_probability,
             "adjusted_red_win_probability": red_win_probability,
         },
+    )
+
+
+@dataclass(frozen=True)
+class SeriesPrediction:
+    blue_team: str
+    red_team: str
+    blue_rating: float
+    red_rating: float
+    best_of: int
+    game_probabilities: list[dict[str, Any]]
+    series_win_probability_blue: float
+    series_win_probability_red: float
+    score_probabilities: dict[str, float]
+    most_likely_score: str
+    side_advantage: float
+    draft_weight: float
+
+
+def _load_rating_setup() -> tuple[EloConfig, float]:
+    if not RATING_CONFIG_FILE.exists():
+        raise FileNotFoundError(
+            "Configuração de rating não encontrada. Rode antes: python3 scripts/build_team_ratings.py"
+        )
+    payload = json.loads(RATING_CONFIG_FILE.read_text(encoding="utf-8"))
+    return EloConfig(**payload["config"]), float(payload["draft_weight"])
+
+
+def _draft_probability(
+    frame: pd.DataFrame,
+    blue_team: str,
+    red_team: str,
+    blue_picks: list[str],
+    red_picks: list[str],
+    blue_bans: list[str],
+    red_bans: list[str],
+) -> float:
+    hypothetical = _build_hypothetical_row(frame, blue_team, red_team)
+    hypothetical.loc[:, "blue_picks"] = "; ".join(blue_picks)
+    hypothetical.loc[:, "red_picks"] = "; ".join(red_picks)
+    hypothetical.loc[:, "blue_bans"] = "; ".join(blue_bans)
+    hypothetical.loc[:, "red_bans"] = "; ".join(red_bans)
+    preprocessor, _, logistic_model = _load_artifacts()
+    transformed = preprocessor.transform(build_feature_frame(hypothetical))
+    return float(logistic_model.predict_proba(transformed)[:, 1][0])
+
+
+def predict_series(
+    blue_team: str,
+    red_team: str,
+    best_of: int = 3,
+    blue_picks: list[str] | None = None,
+    red_picks: list[str] | None = None,
+    blue_bans: list[str] | None = None,
+    red_bans: list[str] | None = None,
+    data_path: Path | None = None,
+) -> SeriesPrediction:
+    blue_team = normalize_text(blue_team)
+    red_team = normalize_text(red_team)
+    config, draft_weight = _load_rating_setup()
+
+    frame = load_context_dataset(_resolve_dataset_path(data_path))
+    known_teams = sorted(set(frame["blue_team"]) | set(frame["red_team"]))
+    for team in (blue_team, red_team):
+        if team not in known_teams:
+            raise ValueError(f"Time desconhecido: {team}. Times disponíveis: {', '.join(known_teams)}")
+
+    impact_lookup = build_impact_lookup()
+    engine, _ = run_walk_forward(frame, config, impact_lookup)
+    blue_rating = engine.rating(blue_team)
+    red_rating = engine.rating(red_team)
+
+    game1_rating_prob = expected_score(blue_rating, red_rating, config.side_advantage)
+    neutral_prob = expected_score(blue_rating, red_rating, 0.0)
+
+    used_draft = bool(blue_picks and red_picks)
+    if used_draft:
+        p_draft = _draft_probability(
+            frame, blue_team, red_team, blue_picks or [], red_picks or [], blue_bans or [], red_bans or []
+        )
+        game1_prob = blend_probabilities(game1_rating_prob, p_draft, draft_weight)
+    else:
+        game1_prob = game1_rating_prob
+
+    game_probs = [game1_prob] + [neutral_prob] * (best_of - 1)
+    series = series_probabilities(game_probs, best_of)
+
+    game_probabilities = [
+        {
+            "game": index + 1,
+            "blue_win_probability": probability,
+            "red_win_probability": 1.0 - probability,
+            "used_draft": used_draft and index == 0,
+        }
+        for index, probability in enumerate(game_probs)
+    ]
+
+    return SeriesPrediction(
+        blue_team=blue_team,
+        red_team=red_team,
+        blue_rating=round(blue_rating, 1),
+        red_rating=round(red_rating, 1),
+        best_of=best_of,
+        game_probabilities=game_probabilities,
+        series_win_probability_blue=series["a_series_win"],
+        series_win_probability_red=series["b_series_win"],
+        score_probabilities=series["score_probabilities"],
+        most_likely_score=series["most_likely_score"],
+        side_advantage=config.side_advantage,
+        draft_weight=draft_weight,
     )
