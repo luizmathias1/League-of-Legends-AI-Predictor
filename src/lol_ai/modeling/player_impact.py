@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from lol_ai.config import ARTIFACTS_DIR, LEGACY_FILTERED_FILE, PROCESSED_DATA_DIR
+from lol_ai.config import ARTIFACTS_DIR, INTERIM_DATA_DIR, LEGACY_FILTERED_FILE, PROCESSED_DATA_DIR
 from lol_ai.modeling.features import TEAM_POSITIONS, normalize_text
 
 
@@ -43,9 +43,12 @@ class LineupRating:
 def _resolve_filtered_path(input_path: Path | None = None) -> Path:
     if input_path is not None:
         return input_path
+    interim = INTERIM_DATA_DIR / "cblol_esports_matches_data.csv"
+    if interim.exists():
+        return interim
     if LEGACY_FILTERED_FILE.exists():
         return LEGACY_FILTERED_FILE
-    raise FileNotFoundError(f"Arquivo filtrado não encontrado: {LEGACY_FILTERED_FILE}")
+    raise FileNotFoundError(f"Arquivo filtrado não encontrado: {interim} nem {LEGACY_FILTERED_FILE}")
 
 
 def _resolve_context_path(input_path: Path | None = None) -> Path:

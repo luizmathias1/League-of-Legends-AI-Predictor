@@ -32,6 +32,14 @@ def is_truthy(value: str | None) -> bool:
     return normalized not in {"", "0", "false", "no", "none"}
 
 
+def should_include_row(league: str, year: str) -> bool:
+    normalized_league = normalize_text(league).lower()
+    normalized_year = normalize_text(year)
+    if "cblol" in normalized_league and normalized_year in {"2025", "2026"}:
+        return True
+    return normalized_league == "lta s" and normalized_year == "2025"
+
+
 def winrate(results: Iterable[bool], window: int | None = None) -> str:
     values = list(results)
     if window is not None:
@@ -115,9 +123,7 @@ def filter_cblol_matches(
             if headers is None:
                 headers = reader.fieldnames or []
             for row in reader:
-                league = normalize_text(row.get("league")).lower()
-                year = normalize_text(row.get("year"))
-                if "cblol" in league and year in {"2025", "2026"}:
+                if should_include_row(row.get("league", ""), row.get("year", "")):
                     filtered_rows.append(row)
 
     with target_path.open("w", encoding="utf-8", newline="") as handle:
