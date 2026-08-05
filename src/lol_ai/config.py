@@ -15,5 +15,7 @@ SHAP_ARTIFACTS_DIR = ARTIFACTS_DIR / "shap"
 SAIDA_DIR = PROJECT_ROOT / "saida"
 GRAFICOS_DIR = SAIDA_DIR / "graficos"
 
+RATING_CONFIG_FILE = MODEL_ARTIFACTS_DIR / "rating_config.json"
+
 LEGACY_FILTERED_FILE = PROJECT_ROOT / "cblol_esports_matches_data.csv"
 LEGACY_PROCESSED_FILE = PROJECT_ROOT / "cblol_game_context_dataset.csv"

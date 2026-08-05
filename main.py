@@ -44,6 +44,12 @@ def run_pipeline() -> None:
         print(path)
     print(f"Pasta de saída dos gráficos: {GRAFICOS_DIR}")
 
+    from lol_ai.modeling.rating_backtest import run_rating_backtest
+
+    rating_payload = run_rating_backtest(processed_output)
+    print("Backtest de rating concluído")
+    print(rating_payload["rating"]["test"])
+
 
 if __name__ == "__main__":
     run_pipeline()

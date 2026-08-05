@@ -116,6 +116,167 @@ def draft_model_probabilities(frame: pd.DataFrame, index: pd.Index) -> pd.Series
     return pd.Series(model.predict_proba(transformed)[:, 1], index=index)
 
 
+# Quatro primeiros slots da paleta categórica validada (dataviz, modo claro)
+CATEGORICAL_COLORS = ("#2a78d6", "#008300", "#e87ba4", "#eda100")
+TEXT_COLOR = "#333333"
+
+
+def run_rating_backtest(data_path=None) -> dict:
+    import json
+    from dataclasses import asdict
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from lol_ai.config import RATING_CONFIG_FILE, REPORT_ARTIFACTS_DIR
+    from lol_ai.modeling.features import chronological_series_split, load_context_dataset
+    from lol_ai.modeling.player_impact import build_impact_lookup
+    from lol_ai.modeling.training import evaluate_predictions
+
+    frame = load_context_dataset(data_path)
+    train_index, validation_index, test_index = chronological_series_split(frame)
+
+    train_blue_win_rate = float(frame.loc[train_index, "blue_win"].astype(int).mean())
+    side_advantage = estimate_side_advantage(train_blue_win_rate)
+
+    validation_start = frame.loc[validation_index, "date"].min()
+    impact_lookup = build_impact_lookup(cutoff_date=validation_start)
+
+    best_config = calibrate_config(frame, validation_index, impact_lookup, side_advantage)
+    engine, probabilities = run_walk_forward(frame, best_config, impact_lookup)
+
+    y_validation = frame.loc[validation_index, "blue_win"].astype(int)
+    y_test = frame.loc[test_index, "blue_win"].astype(int)
+    metrics_asdict = asdict
+
+    p_draft_validation = draft_model_probabilities(frame, validation_index)
+    p_draft_test = draft_model_probabilities(frame, test_index)
+    draft_weight = fit_draft_weight(probabilities.loc[validation_index], p_draft_validation, y_validation)
+    blended_test = pd.Series(
+        [
+            blend_probabilities(rating_prob, draft_prob, draft_weight)
+            for rating_prob, draft_prob in zip(probabilities.loc[test_index], p_draft_test)
+        ],
+        index=test_index,
+    )
+
+    payload = {
+        "rows": int(len(frame)),
+        "train_rows": int(len(train_index)),
+        "validation_rows": int(len(validation_index)),
+        "test_rows": int(len(test_index)),
+        "side_advantage": side_advantage,
+        "train_blue_win_rate": train_blue_win_rate,
+        "config": asdict(best_config),
+        "draft_weight": draft_weight,
+        "rating": {
+            "validation": metrics_asdict(evaluate_predictions(y_validation, probabilities.loc[validation_index].to_numpy())),
+            "test": metrics_asdict(evaluate_predictions(y_test, probabilities.loc[test_index].to_numpy())),
+            "test_series_accuracy": series_level_accuracy(frame, probabilities, test_index),
+        },
+        "rating_plus_draft": {
+            "test": metrics_asdict(evaluate_predictions(y_test, blended_test.to_numpy())),
+        },
+    }
+
+    baseline_file = REPORT_ARTIFACTS_DIR / "cblol_model_metrics.json"
+    if baseline_file.exists():
+        payload["baselines"] = json.loads(baseline_file.read_text(encoding="utf-8"))
+
+    REPORT_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    ratings_frame = (
+        pd.DataFrame(
+            [{"team": team, "rating": round(rating, 1)} for team, rating in engine.current_ratings().items()]
+        )
+        .sort_values("rating", ascending=False)
+        .reset_index(drop=True)
+    )
+    ratings_frame.to_csv(REPORT_ARTIFACTS_DIR / "team_ratings.csv", index=False)
+    pd.DataFrame(engine.history).to_csv(REPORT_ARTIFACTS_DIR / "team_rating_history.csv", index=False)
+
+    with (REPORT_ARTIFACTS_DIR / "rating_model_metrics.json").open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+    RATING_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with RATING_CONFIG_FILE.open("w", encoding="utf-8") as handle:
+        json.dump({"config": asdict(best_config), "draft_weight": draft_weight}, handle, indent=2, ensure_ascii=False)
+
+    _plot_reports(payload, y_test, probabilities.loc[test_index], REPORT_ARTIFACTS_DIR, plt)
+    return payload
+
+
+def _plot_reports(payload, y_test, p_test, output_dir, plt) -> None:
+    import numpy as np
+
+    # 1. Matriz de confusão do rating no teste (sequencial de um matiz)
+    matrix = np.array(payload["rating"]["test"]["confusion_matrix"])
+    fig, ax = plt.subplots(figsize=(4.5, 4))
+    ax.imshow(matrix, cmap="Blues")
+    threshold = matrix.max() / 2 if matrix.max() else 0
+    for (i, j), value in np.ndenumerate(matrix):
+        ax.text(j, i, str(value), ha="center", va="center",
+                color="white" if value > threshold else TEXT_COLOR)
+    ax.set_xticks([0, 1], ["Prev. Red", "Prev. Blue"])
+    ax.set_yticks([0, 1], ["Red venceu", "Blue venceu"])
+    ax.set_title("Rating — matriz de confusão (teste)")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    fig.tight_layout()
+    fig.savefig(output_dir / "rating_confusion_matrix.png", dpi=150)
+    plt.close(fig)
+
+    # 2. Comparação de métricas: rating vs rating+draft vs baselines
+    metric_names = ["accuracy", "precision", "recall", "f1", "roc_auc", "brier", "log_loss"]
+    systems = {"rating": payload["rating"]["test"], "rating+draft": payload["rating_plus_draft"]["test"]}
+    baselines = payload.get("baselines", {})
+    for name in ("logistic_regression", "xgboost"):
+        if name in baselines:
+            systems[name] = baselines[name]["test"]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    x = np.arange(len(metric_names))
+    width = 0.8 / len(systems)
+    for offset, (label, metrics) in enumerate(systems.items()):
+        values = [metrics.get(metric, float("nan")) for metric in metric_names]
+        ax.bar(x + offset * width, values, width * 0.92,
+               label=label, color=CATEGORICAL_COLORS[offset % len(CATEGORICAL_COLORS)])
+    ax.set_xticks(x + width * (len(systems) - 1) / 2, metric_names, rotation=20)
+    ax.set_title("Métricas no teste — rating vs modelos anteriores")
+    ax.legend(frameon=False)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", linewidth=0.4, alpha=0.4)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    fig.savefig(output_dir / "rating_metrics_comparison.png", dpi=150)
+    plt.close(fig)
+
+    # 3. Calibração + distribuição de probabilidades
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    bins = np.linspace(0.0, 1.0, 6)
+    centers = (bins[:-1] + bins[1:]) / 2
+    observed = []
+    for low, high in zip(bins[:-1], bins[1:]):
+        mask = (p_test >= low) & (p_test < high)
+        observed.append(float(y_test[mask].mean()) if mask.any() else float("nan"))
+    axes[0].plot([0, 1], [0, 1], linestyle="--", linewidth=1.2, color="#999999", label="calibração perfeita")
+    axes[0].plot(centers, observed, marker="o", markersize=8, linewidth=2,
+                 color=CATEGORICAL_COLORS[0], label="rating")
+    axes[0].set_title("Calibração (teste)")
+    axes[0].set_xlabel("Probabilidade prevista")
+    axes[0].set_ylabel("Frequência observada")
+    axes[0].legend(frameon=False)
+    axes[0].spines[["top", "right"]].set_visible(False)
+    axes[1].hist(p_test, bins=20, color=CATEGORICAL_COLORS[0])
+    axes[1].set_title("Distribuição das probabilidades")
+    axes[1].set_xlabel("Probabilidade prevista (azul)")
+    axes[1].spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(output_dir / "rating_calibration.png", dpi=150)
+    plt.close(fig)
+
+
 def series_level_accuracy(
     frame: pd.DataFrame,
     probabilities: pd.Series,
