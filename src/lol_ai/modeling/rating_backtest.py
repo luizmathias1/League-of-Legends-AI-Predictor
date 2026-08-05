@@ -74,6 +74,48 @@ def calibrate_config(
     return best_config
 
 
+def _logit(probability: float) -> float:
+    clamped = min(max(probability, 1e-6), 1.0 - 1e-6)
+    return math.log(clamped / (1.0 - clamped))
+
+
+def blend_probabilities(p_rating: float, p_draft: float, weight: float) -> float:
+    combined = _logit(p_rating) + weight * (_logit(p_draft) - _logit(0.5))
+    return 1.0 / (1.0 + math.exp(-combined))
+
+
+def fit_draft_weight(p_rating: pd.Series, p_draft: pd.Series, y_true: pd.Series) -> float:
+    best_weight = 0.0
+    best_loss = float("inf")
+    for step in range(11):
+        weight = step / 10.0
+        blended = [
+            blend_probabilities(rating_prob, draft_prob, weight)
+            for rating_prob, draft_prob in zip(p_rating, p_draft)
+        ]
+        loss = float(log_loss(y_true, blended, labels=[0, 1]))
+        if loss < best_loss - 1e-9:
+            best_loss = loss
+            best_weight = weight
+    return best_weight
+
+
+def draft_model_probabilities(frame: pd.DataFrame, index: pd.Index) -> pd.Series:
+    import json
+    import pickle
+
+    from lol_ai.config import MODEL_ARTIFACTS_DIR
+    from lol_ai.modeling.features import build_feature_frame
+
+    with (MODEL_ARTIFACTS_DIR / "cblol_preprocessor.pkl").open("rb") as handle:
+        preprocessor = pickle.load(handle)
+    with (MODEL_ARTIFACTS_DIR / "cblol_logistic_regression.pkl").open("rb") as handle:
+        model = pickle.load(handle)
+    features = build_feature_frame(frame.loc[index])
+    transformed = preprocessor.transform(features)
+    return pd.Series(model.predict_proba(transformed)[:, 1], index=index)
+
+
 def series_level_accuracy(
     frame: pd.DataFrame,
     probabilities: pd.Series,

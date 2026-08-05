@@ -71,6 +71,39 @@ def test_calibracao_retorna_config_com_vantagem():
     assert config.side_advantage == pytest.approx(10.0)
 
 
+import numpy as np
+
+from lol_ai.modeling.rating_backtest import blend_probabilities, fit_draft_weight
+
+
+def test_blend_peso_zero_devolve_rating():
+    assert blend_probabilities(0.7, 0.2, 0.0) == pytest.approx(0.7)
+
+
+def test_blend_draft_neutro_nao_muda():
+    assert blend_probabilities(0.7, 0.5, 1.0) == pytest.approx(0.7)
+
+
+def test_blend_draft_favoravel_aumenta():
+    assert blend_probabilities(0.6, 0.8, 1.0) > 0.6
+
+
+def test_fit_draft_weight_ignora_draft_ruidoso():
+    rng = np.random.default_rng(42)
+    y = pd.Series(rng.integers(0, 2, size=200))
+    p_rating = pd.Series([0.8 if value == 1 else 0.2 for value in y], index=y.index)
+    p_draft = pd.Series(rng.uniform(0.05, 0.95, size=200), index=y.index)
+    assert fit_draft_weight(p_rating, p_draft, y) == pytest.approx(0.0)
+
+
+def test_fit_draft_weight_usa_draft_informativo():
+    rng = np.random.default_rng(42)
+    y = pd.Series(rng.integers(0, 2, size=200))
+    p_rating = pd.Series(0.5, index=y.index)
+    p_draft = pd.Series([0.85 if value == 1 else 0.15 for value in y], index=y.index)
+    assert fit_draft_weight(p_rating, p_draft, y) > 0.5
+
+
 def test_acuracia_por_serie():
     frame = _synthetic_frame(8)
     probs = pd.Series([0.9 if row.blue_team == "FORTE" else 0.1 for row in frame.itertuples()], index=frame.index)
