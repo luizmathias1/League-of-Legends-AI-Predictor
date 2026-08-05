@@ -63,9 +63,15 @@ def _percentile_by_position(frame: pd.DataFrame, column: str) -> pd.Series:
     return frame.groupby("position")[column].rank(pct=True, method="average")
 
 
-def build_player_ratings(filtered_path: Path | None = None) -> pd.DataFrame:
-    source_path = _resolve_filtered_path(filtered_path)
-    frame = pd.read_csv(source_path)
+def build_player_ratings(
+    filtered_path: Path | None = None,
+    *,
+    frame: pd.DataFrame | None = None,
+    write_report: bool = True,
+) -> pd.DataFrame:
+    if frame is None:
+        source_path = _resolve_filtered_path(filtered_path)
+        frame = pd.read_csv(source_path)
     frame = frame[frame["position"].isin(TEAM_POSITIONS)].copy()
 
     if frame.empty:
@@ -124,9 +130,28 @@ def build_player_ratings(filtered_path: Path | None = None) -> pd.DataFrame:
     latest_team_lookup = latest_rows.set_index("playerid")["teamname"].to_dict() if "teamname" in latest_rows.columns else {}
     aggregated["latest_team"] = aggregated["playerid"].map(latest_team_lookup).fillna("")
 
-    PLAYER_RATINGS_REPORT.parent.mkdir(parents=True, exist_ok=True)
-    aggregated.sort_values(["impact_score", "games"], ascending=[False, False]).to_csv(PLAYER_RATINGS_REPORT, index=False)
+    if write_report:
+        PLAYER_RATINGS_REPORT.parent.mkdir(parents=True, exist_ok=True)
+        aggregated.sort_values(["impact_score", "games"], ascending=[False, False]).to_csv(PLAYER_RATINGS_REPORT, index=False)
     return aggregated.sort_values(["impact_score", "games"], ascending=[False, False]).reset_index(drop=True)
+
+
+def build_impact_lookup(
+    filtered_path: Path | None = None,
+    cutoff_date: object | None = None,
+) -> dict[tuple[str, str], float]:
+    source_path = _resolve_filtered_path(filtered_path)
+    frame = pd.read_csv(source_path)
+    if cutoff_date is not None:
+        frame = frame[pd.to_datetime(frame["date"], errors="coerce") < pd.Timestamp(cutoff_date)]
+    frame = frame[frame["position"].isin(TEAM_POSITIONS)]
+    if frame.empty:
+        return {}
+    ratings = build_player_ratings(frame=frame.copy(), write_report=False)
+    return {
+        (str(row["playername"]).strip().lower(), str(row["position"]).strip().lower()): float(row["impact_score"])
+        for _, row in ratings.iterrows()
+    }
 
 
 def load_player_ratings(filtered_path: Path | None = None) -> pd.DataFrame:
