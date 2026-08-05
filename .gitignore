@@ -4,6 +4,5 @@ __pycache__/
 .DS_Store
 data/
 artifacts/
-saida/
 /*.csv
 .pytest_cache/

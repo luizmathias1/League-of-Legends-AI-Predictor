@@ -7,15 +7,15 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from lol_ai.config import GRAFICOS_DIR, REPORT_ARTIFACTS_DIR, SHAP_ARTIFACTS_DIR
+from lol_ai.config import REPORT_ARTIFACTS_DIR, SHAP_ARTIFACTS_DIR
 
 
 PLOT_STYLE = "whitegrid"
 
 
 def _ensure_output_dir() -> Path:
-    GRAFICOS_DIR.mkdir(parents=True, exist_ok=True)
-    return GRAFICOS_DIR
+    REPORT_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    return REPORT_ARTIFACTS_DIR
 
 
 def _load_metrics() -> dict:

@@ -6,7 +6,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from lol_ai.config import LEGACY_PROCESSED_FILE, PROCESSED_DATA_DIR
+from lol_ai.config import PROCESSED_DATA_FILE
 
 
 TEAM_POSITIONS = ("top", "jng", "mid", "bot", "sup")
@@ -57,10 +57,7 @@ def split_bans_or_picks(value: object, expected_items: int = 5) -> list[str]:
 def resolve_processed_input(input_path: Path | None = None) -> Path:
     if input_path is not None:
         return input_path
-    preferred = PROCESSED_DATA_DIR / "cblol_game_context_dataset.csv"
-    if preferred.exists():
-        return preferred
-    return LEGACY_PROCESSED_FILE
+    return PROCESSED_DATA_FILE
 
 
 def load_context_dataset(input_path: Path | None = None) -> pd.DataFrame:

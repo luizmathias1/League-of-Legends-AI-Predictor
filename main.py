@@ -9,7 +9,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from lol_ai.config import GRAFICOS_DIR, INTERIM_DATA_DIR, PROCESSED_DATA_DIR  # noqa: E402
+from lol_ai.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR, REPORT_ARTIFACTS_DIR  # noqa: E402
 from lol_ai.modeling.explain import explain_model  # noqa: E402
 from lol_ai.modeling.player_impact import build_player_ratings  # noqa: E402
 from lol_ai.modeling.training import train_models  # noqa: E402
@@ -42,7 +42,7 @@ def run_pipeline() -> None:
     print("Gráficos gerados")
     for path in plot_paths:
         print(path)
-    print(f"Pasta de saída dos gráficos: {GRAFICOS_DIR}")
+    print(f"Pasta de saída dos gráficos: {REPORT_ARTIFACTS_DIR}")
 
     from lol_ai.modeling.rating_backtest import run_rating_backtest
 

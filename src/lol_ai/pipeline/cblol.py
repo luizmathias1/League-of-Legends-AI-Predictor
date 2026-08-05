@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import DefaultDict, Iterable
 
-from lol_ai.config import DATA_DIR, INTERIM_DATA_DIR, LEGACY_FILTERED_FILE, PROCESSED_DATA_DIR, RAW_DATA_DIR
+from lol_ai.config import DATA_DIR, INTERIM_DATA_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
 
 
 TEAM_POSITIONS = ("top", "jng", "mid", "bot", "sup")
@@ -285,12 +285,7 @@ def build_context_dataset(
 ) -> Path:
     resolved_input = input_path or (INTERIM_DATA_DIR / FILTERED_FILE_NAME)
     if not resolved_input.exists():
-        fallback = LEGACY_FILTERED_FILE if LEGACY_FILTERED_FILE.exists() else None
-        if fallback is None:
-            raise FileNotFoundError(
-                f"Arquivo filtrado não encontrado em {resolved_input} nem no caminho legado {LEGACY_FILTERED_FILE}."
-            )
-        resolved_input = fallback
+        raise FileNotFoundError(f"Arquivo filtrado não encontrado: {resolved_input}. Rode antes o filtro (scripts/filter_cblol_matches.py).")
 
     games = load_games(resolved_input)
     series_game_counts = defaultdict(int)

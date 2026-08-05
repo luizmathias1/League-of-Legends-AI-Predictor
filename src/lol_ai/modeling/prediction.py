@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from lol_ai.config import MODEL_ARTIFACTS_DIR, PROCESSED_DATA_DIR, LEGACY_PROCESSED_FILE, RATING_CONFIG_FILE
+from lol_ai.config import MODEL_ARTIFACTS_DIR, PROCESSED_DATA_FILE, RATING_CONFIG_FILE
 from lol_ai.modeling.features import build_feature_frame, load_context_dataset, normalize_text
 from lol_ai.modeling.player_impact import build_impact_lookup, build_player_ratings, evaluate_lineup
 from lol_ai.modeling.rating import EloConfig, expected_score
@@ -41,10 +41,7 @@ class MatchPrediction:
 def _resolve_dataset_path(input_path: Path | None = None) -> Path:
     if input_path is not None:
         return input_path
-    preferred = PROCESSED_DATA_DIR / "cblol_game_context_dataset.csv"
-    if preferred.exists():
-        return preferred
-    return LEGACY_PROCESSED_FILE
+    return PROCESSED_DATA_FILE
 
 
 def _load_artifacts() -> tuple[Any, list[str], Any]:
