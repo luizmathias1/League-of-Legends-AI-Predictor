@@ -9,6 +9,8 @@ sobre drafts. Responde três perguntas:
 3. **Quão forte está cada time agora?** — considerando contra quem ganhou/perdeu e as
    trocas de jogadores no elenco.
 
+> Documentação técnica detalhada: [docs/modelo.md](docs/modelo.md)
+
 ## Como funciona
 
 ### 1. Rating de força ponderado pelo adversário
@@ -170,8 +172,8 @@ src/lol_ai/
     └── visualization.py       # gráficos dos baselines
 
 scripts/                       # CLIs individuais de cada etapa
-tests/                         # 37 testes (unitários + integração)
-docs/superpowers/              # spec de design e plano de implementação
+tests/                         # testes unitários e de integração (pytest)
+docs/modelo.md                 # documentação técnica do modelo
 ```
 
 ## Requisitos
