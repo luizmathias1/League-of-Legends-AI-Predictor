@@ -48,6 +48,86 @@ def run_walk_forward(
     return engine, pd.Series(probabilities).reindex(frame.index)
 
 
+def run_walk_forward_with_players(
+    frame: pd.DataFrame,
+    config: EloConfig,
+    player_config,
+    performance_lookup: dict[tuple[str, str, str], float],
+    team_impact_lookup: dict[tuple[str, str], float] | None = None,
+):
+    """Walk-forward do time + Elo individual dos jogadores em paralelo.
+
+    Por padrão o ajuste de roster do time usa o Elo ao vivo dos jogadores;
+    passe team_impact_lookup para usar o impact score estático no time e
+    manter o Elo dos jogadores apenas como métrica de qualidade."""
+    from lol_ai.modeling.player_elo import LivePlayerRatingLookup, PlayerEloEngine
+
+    player_engine = PlayerEloEngine(player_config, performance_lookup)
+    roster_lookup = team_impact_lookup if team_impact_lookup is not None else LivePlayerRatingLookup(player_engine)
+    team_engine = RatingEngine(config, impact_lookup=roster_lookup)
+    ordered = frame.sort_values(["date", "series_id", "game_number"])
+    probabilities: dict[object, float] = {}
+    for index, row in ordered.iterrows():
+        blue_lineup = _lineup_from_row(row, "blue")
+        red_lineup = _lineup_from_row(row, "red")
+        blue_win = bool(int(row["blue_win"]))
+        # o ajuste de roster dentro do process_game usa o Elo dos jogadores
+        # ANTES deste jogo; só depois o Elo individual é atualizado
+        expected_blue = team_engine.process_game(
+            date=row["date"],
+            league=str(row.get("league", "")),
+            year=int(row["year"]),
+            blue_team=str(row["blue_team"]),
+            red_team=str(row["red_team"]),
+            blue_lineup=blue_lineup,
+            red_lineup=red_lineup,
+            blue_win=blue_win,
+        )
+        probabilities[index] = expected_blue
+        game_id = str(row.get("game_id", ""))
+        player_engine.process_side(
+            date=row["date"], game_id=game_id, team=str(row["blue_team"]),
+            opponent=str(row["red_team"]), lineup=blue_lineup,
+            expected=expected_blue, win=blue_win,
+        )
+        player_engine.process_side(
+            date=row["date"], game_id=game_id, team=str(row["red_team"]),
+            opponent=str(row["blue_team"]), lineup=red_lineup,
+            expected=1.0 - expected_blue, win=not blue_win,
+        )
+    return team_engine, player_engine, pd.Series(probabilities).reindex(frame.index)
+
+
+PLAYER_IMPACT_SCALE_GRID = (0.0, 0.25, 0.5, 1.0)
+
+
+def calibrate_config_with_players(
+    frame: pd.DataFrame,
+    validation_index: pd.Index,
+    performance_lookup: dict[tuple[str, str, str], float],
+    side_advantage: float,
+    player_config,
+) -> EloConfig:
+    best_config: EloConfig | None = None
+    best_loss = float("inf")
+    y_validation = frame.loc[validation_index, "blue_win"].astype(int)
+    for k, carry, roster, impact in product(K_GRID, SEASON_CARRY_GRID, ROSTER_REGRESSION_GRID, PLAYER_IMPACT_SCALE_GRID):
+        config = EloConfig(
+            k=k,
+            season_carry=carry,
+            roster_regression_per_player=roster,
+            impact_scale=impact,
+            side_advantage=side_advantage,
+        )
+        _, _, probabilities = run_walk_forward_with_players(frame, config, player_config, performance_lookup)
+        loss = float(log_loss(y_validation, probabilities.loc[validation_index], labels=[0, 1]))
+        if loss < best_loss:
+            best_loss = loss
+            best_config = config
+    assert best_config is not None
+    return best_config
+
+
 def calibrate_config(
     frame: pd.DataFrame,
     validation_index: pd.Index,
@@ -132,7 +212,7 @@ def run_rating_backtest(data_path=None) -> dict:
 
     from lol_ai.config import RATING_CONFIG_FILE, REPORT_ARTIFACTS_DIR
     from lol_ai.modeling.features import chronological_series_split, load_context_dataset
-    from lol_ai.modeling.player_impact import build_impact_lookup
+    from lol_ai.modeling.player_elo import PlayerEloConfig, build_game_performance_scores
     from lol_ai.modeling.training import evaluate_predictions
 
     frame = load_context_dataset(data_path)
@@ -141,11 +221,40 @@ def run_rating_backtest(data_path=None) -> dict:
     train_blue_win_rate = float(frame.loc[train_index, "blue_win"].astype(int).mean())
     side_advantage = estimate_side_advantage(train_blue_win_rate)
 
-    validation_start = frame.loc[validation_index, "date"].min()
-    impact_lookup = build_impact_lookup(cutoff_date=validation_start)
+    player_config = PlayerEloConfig()
+    performance_lookup = build_game_performance_scores()
 
-    best_config = calibrate_config(frame, validation_index, impact_lookup, side_advantage)
-    engine, probabilities = run_walk_forward(frame, best_config, impact_lookup)
+    from lol_ai.modeling.player_impact import build_impact_lookup
+
+    validation_start = frame.loc[validation_index, "date"].min()
+    static_lookup = build_impact_lookup(cutoff_date=validation_start)
+    y_validation_calib = frame.loc[validation_index, "blue_win"].astype(int)
+
+    # Duas fontes candidatas para o ajuste de roster; a validação decide.
+    best_static = calibrate_config(frame, validation_index, static_lookup, side_advantage)
+    _, static_probs = run_walk_forward(frame, best_static, static_lookup)
+    loss_static = float(log_loss(y_validation_calib, static_probs.loc[validation_index], labels=[0, 1]))
+
+    best_player = calibrate_config_with_players(
+        frame, validation_index, performance_lookup, side_advantage, player_config
+    )
+    _, _, player_probs = run_walk_forward_with_players(frame, best_player, player_config, performance_lookup)
+    loss_player = float(log_loss(y_validation_calib, player_probs.loc[validation_index], labels=[0, 1]))
+
+    if loss_player <= loss_static:
+        roster_source = "player_elo"
+        best_config = best_player
+        final_team_lookup = None
+    else:
+        roster_source = "static_impact"
+        best_config = best_static
+        # mantém o lookup cortado na validação: as métricas de teste abaixo
+        # precisam continuar sem vazamento (produção usa período completo)
+        final_team_lookup = static_lookup
+
+    engine, player_engine, probabilities = run_walk_forward_with_players(
+        frame, best_config, player_config, performance_lookup, team_impact_lookup=final_team_lookup
+    )
 
     y_validation = frame.loc[validation_index, "blue_win"].astype(int)
     y_test = frame.loc[test_index, "blue_win"].astype(int)
@@ -170,6 +279,9 @@ def run_rating_backtest(data_path=None) -> dict:
         "side_advantage": side_advantage,
         "train_blue_win_rate": train_blue_win_rate,
         "config": asdict(best_config),
+        "player_config": asdict(player_config),
+        "roster_source": roster_source,
+        "roster_validation_loss": {"static_impact": loss_static, "player_elo": loss_player},
         "draft_weight": draft_weight,
         "rating": {
             "validation": metrics_asdict(evaluate_predictions(y_validation, probabilities.loc[validation_index].to_numpy())),
@@ -197,15 +309,47 @@ def run_rating_backtest(data_path=None) -> dict:
     ratings_frame.to_csv(REPORT_ARTIFACTS_DIR / "team_ratings.csv", index=False)
     pd.DataFrame(engine.history).to_csv(REPORT_ARTIFACTS_DIR / "team_rating_history.csv", index=False)
 
+    player_ranking = player_engine.ranking()
+    player_ranking.to_csv(REPORT_ARTIFACTS_DIR / "player_elo_ratings.csv", index=False)
+    pd.DataFrame(player_engine.history).to_csv(REPORT_ARTIFACTS_DIR / "player_elo_history.csv", index=False)
+
     with (REPORT_ARTIFACTS_DIR / "rating_model_metrics.json").open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
 
     RATING_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with RATING_CONFIG_FILE.open("w", encoding="utf-8") as handle:
-        json.dump({"config": asdict(best_config), "draft_weight": draft_weight}, handle, indent=2, ensure_ascii=False)
+        json.dump(
+            {
+                "config": asdict(best_config),
+                "player_config": asdict(player_config),
+                "roster_source": roster_source,
+                "draft_weight": draft_weight,
+            },
+            handle, indent=2, ensure_ascii=False,
+        )
 
     _plot_reports(payload, y_test, probabilities.loc[test_index], REPORT_ARTIFACTS_DIR, plt)
+    _plot_player_ranking(player_ranking, REPORT_ARTIFACTS_DIR, plt)
     return payload
+
+
+def _plot_player_ranking(player_ranking: pd.DataFrame, output_dir, plt, min_games: int = 8) -> None:
+    top = player_ranking[player_ranking["games"] >= min_games].head(15).iloc[::-1]
+    fig, ax = plt.subplots(figsize=(9, 0.42 * len(top) + 1.4))
+    ax.barh(range(len(top)), top["rating"] - 1500.0, left=1500.0, height=0.62, color=CATEGORICAL_COLORS[0])
+    labels = [f"{row.player} ({row.position}, {row.last_team})" for row in top.itertuples()]
+    ax.set_yticks(range(len(top)), labels, fontsize=8.5)
+    for position, rating in enumerate(top["rating"]):
+        ax.text(rating + 2, position, f"{rating:.0f}", va="center", fontsize=8, color=TEXT_COLOR)
+    ax.axvline(1500.0, linestyle="--", linewidth=1, color="#999999")
+    ax.set_xlabel("Elo do jogador (1500 = neutro)")
+    ax.set_title(f"Top 15 jogadores por Elo individual (mín. {min_games} jogos)")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="x", linewidth=0.4, alpha=0.4)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    fig.savefig(output_dir / "player_elo_ranking.png", dpi=150)
+    plt.close(fig)
 
 
 def _plot_reports(payload, y_test, p_test, output_dir, plt) -> None:

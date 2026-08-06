@@ -12,9 +12,10 @@ import pandas as pd
 
 from lol_ai.config import MODEL_ARTIFACTS_DIR, PROCESSED_DATA_FILE, RATING_CONFIG_FILE
 from lol_ai.modeling.features import build_feature_frame, load_context_dataset, normalize_text
+from lol_ai.modeling.player_elo import PlayerEloConfig, build_game_performance_scores
 from lol_ai.modeling.player_impact import build_impact_lookup, build_player_ratings, evaluate_lineup
 from lol_ai.modeling.rating import EloConfig, expected_score
-from lol_ai.modeling.rating_backtest import blend_probabilities, run_walk_forward
+from lol_ai.modeling.rating_backtest import blend_probabilities, run_walk_forward_with_players
 from lol_ai.modeling.series import series_probabilities
 
 
@@ -350,13 +351,15 @@ class SeriesPrediction:
     draft_weight: float
 
 
-def _load_rating_setup() -> tuple[EloConfig, float]:
+def _load_rating_setup() -> tuple[EloConfig, PlayerEloConfig, str, float]:
     if not RATING_CONFIG_FILE.exists():
         raise FileNotFoundError(
             "Configuração de rating não encontrada. Rode antes: python3 scripts/build_team_ratings.py"
         )
     payload = json.loads(RATING_CONFIG_FILE.read_text(encoding="utf-8"))
-    return EloConfig(**payload["config"]), float(payload["draft_weight"])
+    player_config = PlayerEloConfig(**payload.get("player_config", {}))
+    roster_source = str(payload.get("roster_source", "player_elo"))
+    return EloConfig(**payload["config"]), player_config, roster_source, float(payload["draft_weight"])
 
 
 def _draft_probability(
@@ -390,7 +393,7 @@ def predict_series(
 ) -> SeriesPrediction:
     blue_team = normalize_text(blue_team)
     red_team = normalize_text(red_team)
-    config, draft_weight = _load_rating_setup()
+    config, player_config, roster_source, draft_weight = _load_rating_setup()
 
     frame = load_context_dataset(_resolve_dataset_path(data_path))
     known_teams = sorted(set(frame["blue_team"]) | set(frame["red_team"]))
@@ -398,8 +401,11 @@ def predict_series(
         if team not in known_teams:
             raise ValueError(f"Time desconhecido: {team}. Times disponíveis: {', '.join(known_teams)}")
 
-    impact_lookup = build_impact_lookup()
-    engine, _ = run_walk_forward(frame, config, impact_lookup)
+    performance_lookup = build_game_performance_scores()
+    team_lookup = build_impact_lookup() if roster_source == "static_impact" else None
+    engine, _, _ = run_walk_forward_with_players(
+        frame, config, player_config, performance_lookup, team_impact_lookup=team_lookup
+    )
     blue_rating = engine.rating(blue_team)
     red_rating = engine.rating(red_team)
 

@@ -33,6 +33,7 @@ def _synthetic_frame(n_games: int = 40) -> pd.DataFrame:
                 "red_team": red_team,
                 "blue_win": 1 if strong_is_blue else 0,
                 "winner_team": "FORTE",
+                "game_id": f"g{i}",
                 **{f"blue_{p}_player": lineups[blue_team][p] for p in ("top", "jng", "mid", "bot", "sup")},
                 **{f"red_{p}_player": lineups[red_team][p] for p in ("top", "jng", "mid", "bot", "sup")},
             }
@@ -102,6 +103,37 @@ def test_fit_draft_weight_usa_draft_informativo():
     p_rating = pd.Series(0.5, index=y.index)
     p_draft = pd.Series([0.85 if value == 1 else 0.15 for value in y], index=y.index)
     assert fit_draft_weight(p_rating, p_draft, y) > 0.5
+
+
+from lol_ai.modeling.player_elo import PlayerEloConfig
+from lol_ai.modeling.rating_backtest import run_walk_forward_with_players
+
+
+def test_walk_forward_com_jogadores_mantem_probabilidades():
+    frame = _synthetic_frame()
+    team_engine, player_engine, probs = run_walk_forward_with_players(
+        frame, EloConfig(), PlayerEloConfig(), performance_lookup={}
+    )
+    assert len(probs) == len(frame)
+    assert team_engine.rating("FORTE") > team_engine.rating("FRACO")
+    # jogadores do time vencedor sobem, do perdedor descem
+    assert player_engine.rating("f_mid", "mid") > 1500.0 > player_engine.rating("w_mid", "mid")
+
+
+def test_troca_por_desconhecido_penaliza_time_vencedor():
+    frame = _synthetic_frame()
+    # último jogo: FORTE troca o mid por um novato sem histórico (Elo 1500)
+    last = frame.index[-2]  # FORTE é blue nos índices pares
+    frame.loc[last, "blue_mid_player"] = "novato"
+    config = EloConfig(roster_regression_per_player=0.0, impact_scale=0.5)
+    team_engine, _, _ = run_walk_forward_with_players(
+        frame, config, PlayerEloConfig(), performance_lookup={}
+    )
+    entries = [h for h in team_engine.history if h["team"] == "FORTE" and h["roster_changes"] > 0]
+    assert entries, "a troca deveria ter sido registrada"
+    # primeira troca = titular (Elo > 1500) sai, novato (1500) entra -> penalidade;
+    # no jogo seguinte o titular volta, o que conta como nova troca positiva
+    assert entries[0]["roster_adjustment"] < 0
 
 
 def test_acuracia_por_serie():

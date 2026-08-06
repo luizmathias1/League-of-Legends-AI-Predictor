@@ -40,6 +40,19 @@ anterior:
 
 Na virada de temporada (2025 → 2026) todos os ratings regridem parcialmente à média.
 
+### 2b. Elo individual por jogador
+
+Cada jogador também tem um rating estilo Elo, atualizado jogo a jogo com a mesma
+ponderação por adversário do time, **modulado pelo desempenho individual** na partida
+(percentil por posição de dano, ouro, visão e vantagens aos 15min): quem carrega ganha
+até 1.5× os pontos; quem joga mal numa derrota perde até 1.5×. O rating acompanha o
+jogador em trocas de time. Saídas: `player_elo_ratings.csv`, `player_elo_history.csv`
+e o gráfico `player_elo_ranking.png`.
+
+No ajuste de roster do time, a calibração escolhe automaticamente entre o impact score
+estático e o Elo individual (a fonte com menor log loss na validação vence — registrado
+em `roster_source` no relatório de métricas).
+
 ### 3. Calibração automática (sem números chutados)
 
 Os hiperparâmetros (K, regressão de temporada, regressão por troca, escala de impacto)
