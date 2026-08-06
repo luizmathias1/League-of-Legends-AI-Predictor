@@ -44,16 +44,6 @@ def normalize_text(value: object) -> str:
     return str(value).strip()
 
 
-def split_bans_or_picks(value: object, expected_items: int = 5) -> list[str]:
-    normalized = normalize_text(value)
-    if not normalized:
-        return [""] * expected_items
-    items = [item.strip() for item in normalized.split(";")]
-    if len(items) < expected_items:
-        items.extend([""] * (expected_items - len(items)))
-    return items[:expected_items]
-
-
 def resolve_processed_input(input_path: Path | None = None) -> Path:
     if input_path is not None:
         return input_path
@@ -75,24 +65,13 @@ def load_context_dataset(input_path: Path | None = None) -> pd.DataFrame:
     return frame
 
 
-def add_draft_slot_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    enriched = frame.copy()
-    for prefix in ("blue_bans", "red_bans", "blue_picks", "red_picks"):
-        slots = enriched[prefix].apply(split_bans_or_picks)
-        for index in range(5):
-            enriched[f"{prefix[:-1]}{index + 1}"] = slots.apply(lambda values, idx=index: values[idx])
-    return enriched
-
-
 def build_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    enriched = add_draft_slot_columns(frame)
+    # Features de campeões específicos (slots de picks/bans) foram removidas:
+    # com poucos jogos elas viram memorização (ex.: "ban1 Varus"), não sinal.
+    enriched = frame.copy()
     feature_columns = [
         *NUMERIC_COLUMNS,
         *BASE_CATEGORICAL_COLUMNS,
-        *[f"blue_ban{i}" for i in range(1, 6)],
-        *[f"red_ban{i}" for i in range(1, 6)],
-        *[f"blue_pick{i}" for i in range(1, 6)],
-        *[f"red_pick{i}" for i in range(1, 6)],
     ]
 
     for column in feature_columns:
