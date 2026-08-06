@@ -31,6 +31,14 @@ Isso produz o comportamento desejado:
 No backtest real, a maior punição da temporada foi a LOUD perdendo para a lanterna
 Leviatan com 77% de expectativa: **−18.5 pontos**.
 
+### 1b. Margem de vitória
+
+Nem toda vitória vale o mesmo: o delta de rating é multiplicado pela **dominância do
+vencedor** (vantagem de ouro por minuto, em escala logarítmica, com a mediana da janela
+de treino como ponto neutro — multiplicador entre 0.25× e 2×). Um stomp de 25 minutos
+move o rating até 2× mais que uma vitória raspada de 45. O peso da margem também é
+calibrado no backtest (hoje: peso máximo 1.0).
+
 ### 2. Parâmetro de troca de jogadores (roster)
 
 O jogo muda e os times trocam de jogadores. Quando a lineup de um jogo difere da
@@ -80,11 +88,11 @@ Walk-forward estrito, janela de teste cronológica (~76 jogos):
 
 | Sistema | Accuracy | ROC AUC | Log loss | Brier | F1 |
 |---|---|---|---|---|---|
-| **Rating (este trabalho)** | **0.66** | **0.63** | **0.66** | **0.23** | **0.73** |
-| Regressão logística (draft) | 0.50 | 0.54 | 0.82 | 0.29 | 0.57 |
-| XGBoost (draft) | 0.57 | 0.56 | 0.91 | 0.31 | 0.61 |
+| **Rating + margem de vitória** | **0.68** | **0.64** | **0.66** | **0.23** | **0.76** |
+| Regressão logística (contexto) | 0.62 | 0.58 | 0.72 | 0.25 | 0.69 |
+| XGBoost (contexto) | 0.58 | 0.61 | 0.87 | 0.30 | 0.64 |
 
-Acerto do vencedor da série na janela de teste: **63%**.
+Acerto do vencedor da série na janela de teste: **74%**.
 
 ## Dados
 
