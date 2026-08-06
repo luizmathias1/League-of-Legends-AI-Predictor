@@ -109,6 +109,57 @@ def test_troca_de_jogador_regride_e_ajusta_por_impacto():
     assert entry["roster_adjustment"] == pytest.approx(expected_adjustment, abs=0.01)
 
 
+def test_mov_desligado_por_padrao():
+    config = EloConfig()
+    assert config.mov_weight == 0.0
+    engine_a = RatingEngine(EloConfig())
+    engine_b = RatingEngine(EloConfig())
+    _play(engine_a, "FURIA", "LEV", blue_win=True)
+    engine_b.process_game(
+        date="2026-01-01", league="CBLOL", year=2026,
+        blue_team="FURIA", red_team="LEV",
+        blue_lineup=LINEUP_A, red_lineup=LINEUP_B,
+        blue_win=True, margin_gpm=500.0,
+    )
+    assert engine_a.rating("FURIA") == pytest.approx(engine_b.rating("FURIA"))
+
+
+def _play_mov(margin_gpm):
+    engine = RatingEngine(EloConfig(mov_weight=1.0, mov_reference=150.0))
+    engine.process_game(
+        date="2026-01-01", league="CBLOL", year=2026,
+        blue_team="FURIA", red_team="LEV",
+        blue_lineup=LINEUP_A, red_lineup=LINEUP_B,
+        blue_win=True, margin_gpm=margin_gpm,
+    )
+    return engine
+
+
+def test_vitoria_dominante_rende_mais_que_apertada():
+    dominante = _play_mov(400.0)
+    apertada = _play_mov(40.0)
+    assert dominante.rating("FURIA") > apertada.rating("FURIA") > 1500.0
+
+
+def test_margem_na_referencia_e_neutra():
+    referencia = _play_mov(150.0)
+    sem_margem = _play_mov(None)
+    assert referencia.rating("FURIA") == pytest.approx(sem_margem.rating("FURIA"))
+
+
+def test_margem_extrema_e_limitada():
+    extrema = _play_mov(100000.0)
+    base_gain = 0.5 * 24.0  # k padrão 24? não: usa EloConfig().k
+    config = EloConfig()
+    max_gain = config.k * 0.5 * 2.0  # multiplicador máximo 2x
+    assert extrema.rating("FURIA") - 1500.0 <= max_gain + 1e-9
+
+
+def test_mov_preserva_soma_zero():
+    engine = _play_mov(400.0)
+    assert engine.rating("FURIA") - 1500.0 == pytest.approx(1500.0 - engine.rating("LEV"))
+
+
 def test_primeiro_jogo_nao_conta_troca():
     engine = RatingEngine(EloConfig())
     _play(engine, "FURIA", "LEV", blue_win=True)

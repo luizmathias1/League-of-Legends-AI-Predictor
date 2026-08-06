@@ -12,6 +12,11 @@ K_GRID = (16.0, 24.0, 32.0, 40.0)
 SEASON_CARRY_GRID = (0.4, 0.6, 0.8, 1.0)
 ROSTER_REGRESSION_GRID = (0.0, 0.05, 0.10, 0.20)
 IMPACT_SCALE_GRID = (0.0, 1.0, 2.0)
+MOV_WEIGHT_GRID = (0.0, 0.5, 1.0)
+
+
+def _mov_weight_grid(mov_reference: float) -> tuple[float, ...]:
+    return MOV_WEIGHT_GRID if mov_reference > 0 else (0.0,)
 
 
 def estimate_side_advantage(blue_win_rate: float) -> float:
@@ -24,6 +29,18 @@ def _lineup_from_row(row: pd.Series, prefix: str) -> dict[str, str]:
         position: str(row.get(f"{prefix}_{position}_player") or "").strip()
         for position in TEAM_POSITIONS
     }
+
+
+def _margin_from_row(row: pd.Series) -> float | None:
+    """Dominância do vencedor em ouro/minuto; None quando não disponível."""
+    try:
+        gold_diff = float(row.get("blue_gold_diff"))
+        length_seconds = float(row.get("gamelength"))
+    except (TypeError, ValueError):
+        return None
+    if length_seconds <= 0 or pd.isna(gold_diff) or pd.isna(length_seconds):
+        return None
+    return abs(gold_diff) / (length_seconds / 60.0)
 
 
 def run_walk_forward(
@@ -44,6 +61,7 @@ def run_walk_forward(
             blue_lineup=_lineup_from_row(row, "blue"),
             red_lineup=_lineup_from_row(row, "red"),
             blue_win=bool(int(row["blue_win"])),
+            margin_gpm=_margin_from_row(row),
         )
     return engine, pd.Series(probabilities).reindex(frame.index)
 
@@ -82,6 +100,7 @@ def run_walk_forward_with_players(
             blue_lineup=blue_lineup,
             red_lineup=red_lineup,
             blue_win=blue_win,
+            margin_gpm=_margin_from_row(row),
         )
         probabilities[index] = expected_blue
         game_id = str(row.get("game_id", ""))
@@ -107,17 +126,22 @@ def calibrate_config_with_players(
     performance_lookup: dict[tuple[str, str, str], float],
     side_advantage: float,
     player_config,
+    mov_reference: float = 0.0,
 ) -> EloConfig:
     best_config: EloConfig | None = None
     best_loss = float("inf")
     y_validation = frame.loc[validation_index, "blue_win"].astype(int)
-    for k, carry, roster, impact in product(K_GRID, SEASON_CARRY_GRID, ROSTER_REGRESSION_GRID, PLAYER_IMPACT_SCALE_GRID):
+    for k, carry, roster, impact, mov_weight in product(
+        K_GRID, SEASON_CARRY_GRID, ROSTER_REGRESSION_GRID, PLAYER_IMPACT_SCALE_GRID, _mov_weight_grid(mov_reference)
+    ):
         config = EloConfig(
             k=k,
             season_carry=carry,
             roster_regression_per_player=roster,
             impact_scale=impact,
             side_advantage=side_advantage,
+            mov_weight=mov_weight,
+            mov_reference=mov_reference if mov_weight > 0 else 0.0,
         )
         _, _, probabilities = run_walk_forward_with_players(frame, config, player_config, performance_lookup)
         loss = float(log_loss(y_validation, probabilities.loc[validation_index], labels=[0, 1]))
@@ -133,17 +157,22 @@ def calibrate_config(
     validation_index: pd.Index,
     impact_lookup: dict[tuple[str, str], float],
     side_advantage: float,
+    mov_reference: float = 0.0,
 ) -> EloConfig:
     best_config: EloConfig | None = None
     best_loss = float("inf")
     y_validation = frame.loc[validation_index, "blue_win"].astype(int)
-    for k, carry, roster, impact in product(K_GRID, SEASON_CARRY_GRID, ROSTER_REGRESSION_GRID, IMPACT_SCALE_GRID):
+    for k, carry, roster, impact, mov_weight in product(
+        K_GRID, SEASON_CARRY_GRID, ROSTER_REGRESSION_GRID, IMPACT_SCALE_GRID, _mov_weight_grid(mov_reference)
+    ):
         config = EloConfig(
             k=k,
             season_carry=carry,
             roster_regression_per_player=roster,
             impact_scale=impact,
             side_advantage=side_advantage,
+            mov_weight=mov_weight,
+            mov_reference=mov_reference if mov_weight > 0 else 0.0,
         )
         _, probabilities = run_walk_forward(frame, config, impact_lookup)
         loss = float(log_loss(y_validation, probabilities.loc[validation_index], labels=[0, 1]))
@@ -221,6 +250,13 @@ def run_rating_backtest(data_path=None) -> dict:
     train_blue_win_rate = float(frame.loc[train_index, "blue_win"].astype(int).mean())
     side_advantage = estimate_side_advantage(train_blue_win_rate)
 
+    # referência de dominância = mediana da margem (ouro/min) na janela de treino
+    train_margins = [
+        margin for _, row in frame.loc[train_index].iterrows()
+        if (margin := _margin_from_row(row)) is not None
+    ]
+    mov_reference = float(pd.Series(train_margins).median()) if train_margins else 0.0
+
     player_config = PlayerEloConfig()
     performance_lookup = build_game_performance_scores()
 
@@ -231,12 +267,12 @@ def run_rating_backtest(data_path=None) -> dict:
     y_validation_calib = frame.loc[validation_index, "blue_win"].astype(int)
 
     # Duas fontes candidatas para o ajuste de roster; a validação decide.
-    best_static = calibrate_config(frame, validation_index, static_lookup, side_advantage)
+    best_static = calibrate_config(frame, validation_index, static_lookup, side_advantage, mov_reference)
     _, static_probs = run_walk_forward(frame, best_static, static_lookup)
     loss_static = float(log_loss(y_validation_calib, static_probs.loc[validation_index], labels=[0, 1]))
 
     best_player = calibrate_config_with_players(
-        frame, validation_index, performance_lookup, side_advantage, player_config
+        frame, validation_index, performance_lookup, side_advantage, player_config, mov_reference
     )
     _, _, player_probs = run_walk_forward_with_players(frame, best_player, player_config, performance_lookup)
     loss_player = float(log_loss(y_validation_calib, player_probs.loc[validation_index], labels=[0, 1]))

@@ -69,6 +69,17 @@ def get_player_rows(rows: list[dict[str, str]], side: str) -> dict[str, dict[str
     return players
 
 
+def compute_gold_diff(blue_row: dict[str, str], red_row: dict[str, str]) -> str:
+    blue_gold = normalize_text(blue_row.get("totalgold"))
+    red_gold = normalize_text(red_row.get("totalgold"))
+    if not blue_gold or not red_gold:
+        return ""
+    try:
+        return str(int(float(blue_gold)) - int(float(red_gold)))
+    except ValueError:
+        return ""
+
+
 def get_bans_and_picks(row: dict[str, str]) -> tuple[str, str]:
     bans = join_nonempty(row.get(f"ban{i}") for i in range(1, 6))
     picks = join_nonempty(row.get(f"pick{i}") for i in range(1, 6))
@@ -255,6 +266,8 @@ def build_context_row(
         "series_score_blue_before": str(blue_score_before),
         "series_score_red_before": str(red_score_before),
         "first_pick_side": first_pick_side,
+        "gamelength": normalize_text(blue_row.get("gamelength")),
+        "blue_gold_diff": compute_gold_diff(blue_row, red_row),
         "blue_bans": blue_bans,
         "red_bans": red_bans,
         "blue_picks": blue_picks,
@@ -354,6 +367,8 @@ def build_context_dataset(
         "series_score_blue_before",
         "series_score_red_before",
         "first_pick_side",
+        "gamelength",
+        "blue_gold_diff",
         "blue_bans",
         "red_bans",
         "blue_picks",

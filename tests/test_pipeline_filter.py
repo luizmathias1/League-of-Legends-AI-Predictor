@@ -25,3 +25,16 @@ def test_outra_liga_excluida():
 
 def test_lta_sul_2026_excluido():
     assert should_include_row("LTA S", "2026") is False
+
+
+from lol_ai.pipeline.cblol import compute_gold_diff  # noqa: E402
+
+
+def test_gold_diff_perspectiva_azul():
+    assert compute_gold_diff({"totalgold": "65405"}, {"totalgold": "60000"}) == "5405"
+    assert compute_gold_diff({"totalgold": "60000"}, {"totalgold": "65405"}) == "-5405"
+
+
+def test_gold_diff_ausente_fica_vazio():
+    assert compute_gold_diff({"totalgold": ""}, {"totalgold": "60000"}) == ""
+    assert compute_gold_diff({}, {}) == ""

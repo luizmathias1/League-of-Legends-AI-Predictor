@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -11,6 +12,22 @@ class EloConfig:
     roster_regression_per_player: float = 0.10
     impact_scale: float = 1.5
     side_advantage: float = 0.0
+    # Margem de vitória: 0.0 desliga; mov_reference é a dominância típica
+    # (ouro/min de vantagem do vencedor) que equivale ao multiplicador neutro 1.0
+    mov_weight: float = 0.0
+    mov_reference: float = 0.0
+
+
+MOV_MULTIPLIER_MIN = 0.25
+MOV_MULTIPLIER_MAX = 2.0
+
+
+def mov_multiplier(margin_gpm: float | None, reference: float, weight: float) -> float:
+    if weight <= 0.0 or reference <= 0.0 or margin_gpm is None or margin_gpm < 0:
+        return 1.0
+    raw = math.log1p(margin_gpm) / math.log1p(reference)
+    effective = 1.0 + weight * (raw - 1.0)
+    return max(MOV_MULTIPLIER_MIN, min(MOV_MULTIPLIER_MAX, effective))
 
 
 def expected_score(rating_a: float, rating_b: float, advantage_a: float = 0.0) -> float:
@@ -86,6 +103,7 @@ class RatingEngine:
         blue_lineup: dict[str, str],
         red_lineup: dict[str, str],
         blue_win: bool,
+        margin_gpm: float | None = None,
     ) -> float:
         adjustments: dict[str, dict[str, float]] = {}
         for team, lineup in ((blue_team, blue_lineup), (red_team, red_lineup)):
@@ -103,7 +121,8 @@ class RatingEngine:
         rating_red = self.rating(red_team)
         expected_blue = expected_score(rating_blue, rating_red, self.config.side_advantage)
         result_blue = 1.0 if blue_win else 0.0
-        delta_blue = elo_delta(self.config.k, result_blue, expected_blue)
+        multiplier = mov_multiplier(margin_gpm, self.config.mov_reference, self.config.mov_weight)
+        delta_blue = multiplier * elo_delta(self.config.k, result_blue, expected_blue)
 
         for team, opponent, side, rating_before, expected, result, delta in (
             (blue_team, red_team, "Blue", rating_blue, expected_blue, result_blue, delta_blue),

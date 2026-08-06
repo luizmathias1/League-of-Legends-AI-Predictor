@@ -34,6 +34,8 @@ def _synthetic_frame(n_games: int = 40) -> pd.DataFrame:
                 "blue_win": 1 if strong_is_blue else 0,
                 "winner_team": "FORTE",
                 "game_id": f"g{i}",
+                "gamelength": 1800,
+                "blue_gold_diff": 9000 if strong_is_blue else -9000,
                 **{f"blue_{p}_player": lineups[blue_team][p] for p in ("top", "jng", "mid", "bot", "sup")},
                 **{f"red_{p}_player": lineups[red_team][p] for p in ("top", "jng", "mid", "bot", "sup")},
             }
@@ -134,6 +136,24 @@ def test_troca_por_desconhecido_penaliza_time_vencedor():
     # primeira troca = titular (Elo > 1500) sai, novato (1500) entra -> penalidade;
     # no jogo seguinte o titular volta, o que conta como nova troca positiva
     assert entries[0]["roster_adjustment"] < 0
+
+
+def test_mov_acelera_convergencia_com_vitorias_dominantes():
+    frame = _synthetic_frame()
+    # margem sintética: 9000 de ouro em 30min = 300 gpm; referência 150 -> dominante
+    _, probs_sem_mov = run_walk_forward(frame, EloConfig(), impact_lookup={})
+    engine_mov, probs_mov = run_walk_forward(
+        frame, EloConfig(mov_weight=1.0, mov_reference=150.0), impact_lookup={}
+    )
+    assert engine_mov.rating("FORTE") > 1500.0
+    ultimo = frame[frame["blue_team"] == "FORTE"].index[-1]
+    assert probs_mov.loc[ultimo] > probs_sem_mov.loc[ultimo]
+
+
+def test_margem_ausente_nao_quebra():
+    frame = _synthetic_frame().drop(columns=["gamelength", "blue_gold_diff"])
+    _, probs = run_walk_forward(frame, EloConfig(mov_weight=1.0, mov_reference=150.0), impact_lookup={})
+    assert len(probs) == len(frame)
 
 
 def test_acuracia_por_serie():
