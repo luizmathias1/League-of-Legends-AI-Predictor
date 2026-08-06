@@ -6,3 +6,4 @@ data/
 artifacts/
 /*.csv
 .pytest_cache/
+.claude/
